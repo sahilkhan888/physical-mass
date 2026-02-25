@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cloth Physics</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@700;800&display=swap');
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: #080808;
+    height: 100vh;
+    overflow: hidden;
+    font-family: 'Space Mono', monospace;
+    color: #ccc;
+  }
+
+  canvas {
+    display: block;
+    position: fixed;
+    top: 0;
+    left: 0;
+    cursor: grab;
+  }
+
+  canvas:active { cursor: grabbing; }
+
+  /* Upload */
+  .upload {
+    position: fixed;
+    inset: 0;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: opacity 0.4s, visibility 0.4s;
+  }
+
+  .upload.gone {
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+  }
+
+  .upload-card {
+    width: 380px;
+    padding: 52px 36px;
+    border: 1.5px dashed #2a2a2a;
+    border-radius: 14px;
+    background: #111;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color 0.25s, transform 0.25s;
+  }
+
+  .upload-card:hover {
+    border-color: #ff6b35;
+    transform: translateY(-3px);
+  }
+
+  .upload-card .icon {
+    font-size: 28px;
+    margin-bottom: 18px;
+    color: #ff6b35;
+  }
+
+  .upload-card h2 {
+    font-family: 'Syne', sans-serif;
+    font-size: 18px;
+    font-weight: 700;
+    color: #e0e0e0;
+    margin-bottom: 8px;
+  }
+
+  .upload-card p {
+    font-size: 11px;
+    color: #555;
+    line-height: 1.7;
+  }
+
+  /* Bottom hint */
+  .tag {
+    position: fixed;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 10;
+    font-size: 11px;
+    color: #333;
+    letter-spacing: 0.5px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    opacity: 0;
+    transition: opacity 0.6s;
+  }
+
+  .tag.show { opacity: 1; }
+
+  .tag button {
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+    color: #555;
+    background: none;
+    border: 1px solid #222;
+    padding: 6px 14px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: color 0.2s, border-color 0.2s;
+  }
+
+  .tag button:hover {
+    color: #ff6b35;
+    border-color: #ff6b35;
+  }
+
+  /* Subtle grid */
+  .grid {
+    position: fixed;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(255,255,255,0.015) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,0.015) 1px, transparent 1px);
+    background-size: 80px 80px;
+    pointer-events: none;
+  }
+
+  #fi { display: none; }
+
+  body.dragover .upload-card {
+    border-color: #ff6b35;
+    transform: translateY(-3px);
+  }
+</style>
+</head>
+<body>
+<div class="grid"></div>
+<canvas id="c"></canvas>
+
+<div class="upload" id="up">
+  <div class="upload-card" id="uc">
+    <div class="icon">↑</div>
+    <h2>Drop an image</h2>
+    <p>or click to browse · PNG, JPG, WEBP<br>drag the image to see cloth physics</p>
+  </div>
+</div>
+
+<div class="tag" id="tag">
+  <span>drag to deform</span>
+  <button id="newBtn">+ new image</button>
+</div>
+
+<input type="file" id="fi" accept="image/*">
+
+<script>
+const cvs = document.getElementById('c');
+const ctx = cvs.getContext('2d');
+let W, H;
+let img = null;
+
+function resize() {
+  W = cvs.width = innerWidth;
+  H = cvs.height = innerHeight;
+  if (img) buildCloth();
+}
+resize();
+addEventListener('resize', resize);
+
+// ---- Cloth config ----
+const COLS = 30;
+const ROWS = 30;
+const ITERATIONS = 4;
+const DAMPING = 0.96;
+const GRAVITY = 0.25;
+const RADIUS = 45;
+let pts = [];
+let links = [];
+let mx = 0, my = 0, pmx = 0, pmy = 0, mdown = false;
+
+// ---- Build cloth ----
+function buildCloth() {
+  pts = [];
+  links = [];
+
+  const scale = Math.min((W * 0.55) / img.width, (H * 0.6) / img.height);
+  const cw = img.width * scale;
+  const ch = img.height * scale;
+  const ox = (W - cw) / 2;
+  const oy = (H - ch) / 2;
+  const sx = cw / (COLS - 1);
+  const sy = ch / (ROWS - 1);
+
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      const x = ox + c * sx;
+      const y = oy + r * sy;
+      pts.push({
+        x, y, ox: x, oy: y, px: x, py: y,
+        u: c / (COLS - 1),
+        v: r / (ROWS - 1),
+        pin: false
+      });
+    }
+  }
+
+  // structural links
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      const i = r * COLS + c;
+      if (c < COLS - 1) {
+        const j = i + 1;
+        links.push({ a: i, b: j, rest: pdist(pts[i], pts[j]) });
+      }
+      if (r < ROWS - 1) {
+        const j = i + COLS;
+        links.push({ a: i, b: j, rest: pdist(pts[i], pts[j]) });
+      }
+    }
+  }
+}
+
+function pdist(a, b) {
+  const dx = b.x - a.x, dy = b.y - a.y;
+  return Math.sqrt(dx * dx + dy * dy);
+}
+
+// ---- Physics step ----
+function step() {
+  // verlet integration
+  for (const p of pts) {
+    if (p.pin) continue;
+    const vx = (p.x - p.px) * DAMPING;
+    const vy = (p.y - p.py) * DAMPING;
+    p.px = p.x;
+    p.py = p.y;
+    p.x += vx;
+    p.y += vy + GRAVITY;
+  }
+
+  // mouse drag influence
+  if (mdown) {
+    const dmx = mx - pmx;
+    const dmy = my - pmy;
+    for (const p of pts) {
+      const dx = p.x - mx;
+      const dy = p.y - my;
+      const d = Math.sqrt(dx * dx + dy * dy);
+      if (d < RADIUS) {
+        const f = (RADIUS - d) / RADIUS;
+        const strength = f * f * 1.6;
+        p.px -= dmx * strength;
+        p.py -= dmy * strength;
+      }
+    }
+  }
+
+  // solve constraints
+  for (let iter = 0; iter < ITERATIONS; iter++) {
+    for (const l of links) {
+      const a = pts[l.a], b = pts[l.b];
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const d = Math.sqrt(dx * dx + dy * dy) || 0.001;
+      const diff = (l.rest - d) / d * 0.5;
+      const cx = dx * diff;
+      const cy = dy * diff;
+      if (!a.pin) { a.x -= cx; a.y -= cy; }
+      if (!b.pin) { b.x += cx; b.y += cy; }
+    }
+
+    // soft return to origin
+    for (const p of pts) {
+      if (p.pin) continue;
+      p.x += (p.ox - p.x) * 0.003;
+      p.y += (p.oy - p.y) * 0.003;
+    }
+  }
+}
+
+// ---- Render ----
+function drawTri(p0, p1, p2) {
+  const x0 = p0.x, y0 = p0.y;
+  const x1 = p1.x, y1 = p1.y;
+  const x2 = p2.x, y2 = p2.y;
+  const u0 = p0.u * img.width, v0 = p0.v * img.height;
+  const u1 = p1.u * img.width, v1 = p1.v * img.height;
+  const u2 = p2.u * img.width, v2 = p2.v * img.height;
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(x0, y0);
+  ctx.lineTo(x1, y1);
+  ctx.lineTo(x2, y2);
+  ctx.closePath();
+  ctx.clip();
+
+  const den = u0 * (v1 - v2) + u1 * (v2 - v0) + u2 * (v0 - v1);
+  if (Math.abs(den) < 0.01) { ctx.restore(); return; }
+  const t = 1 / den;
+  ctx.setTransform(
+    t * ((v1 - v2) * x0 + (v2 - v0) * x1 + (v0 - v1) * x2),
+    t * ((v1 - v2) * y0 + (v2 - v0) * y1 + (v0 - v1) * y2),
+    t * ((u2 - u1) * x0 + (u0 - u2) * x1 + (u1 - u0) * x2),
+    t * ((u2 - u1) * y0 + (u0 - u2) * y1 + (u1 - u0) * y2),
+    t * ((u1 * v2 - u2 * v1) * x0 + (u2 * v0 - u0 * v2) * x1 + (u0 * v1 - u1 * v0) * x2),
+    t * ((u1 * v2 - u2 * v1) * y0 + (u2 * v0 - u0 * v2) * y1 + (u0 * v1 - u1 * v0) * y2)
+  );
+  ctx.drawImage(img, 0, 0);
+  ctx.restore();
+}
+
+function render() {
+  if (!img) { requestAnimationFrame(render); return; }
+
+  step();
+  ctx.clearRect(0, 0, W, H);
+
+  // shadow
+  ctx.globalAlpha = 0.04;
+  ctx.save();
+  ctx.translate(6, 10);
+  for (let r = 0; r < ROWS - 1; r++) {
+    for (let c = 0; c < COLS - 1; c++) {
+      const i = r * COLS + c;
+      drawTri(pts[i], pts[i + 1], pts[i + COLS]);
+      drawTri(pts[i + 1], pts[i + COLS + 1], pts[i + COLS]);
+    }
+  }
+  ctx.restore();
+  ctx.globalAlpha = 1;
+
+  // main
+  for (let r = 0; r < ROWS - 1; r++) {
+    for (let c = 0; c < COLS - 1; c++) {
+      const i = r * COLS + c;
+      drawTri(pts[i], pts[i + 1], pts[i + COLS]);
+      drawTri(pts[i + 1], pts[i + COLS + 1], pts[i + COLS]);
+    }
+  }
+
+  requestAnimationFrame(render);
+}
+render();
+
+// ---- Mouse ----
+cvs.addEventListener('mousedown', e => {
+  mdown = true; mx = pmx = e.clientX; my = pmy = e.clientY;
+});
+cvs.addEventListener('mousemove', e => {
+  pmx = mx; pmy = my; mx = e.clientX; my = e.clientY;
+});
+cvs.addEventListener('mouseup', () => mdown = false);
+cvs.addEventListener('mouseleave', () => mdown = false);
+
+// Touch
+cvs.addEventListener('touchstart', e => {
+  e.preventDefault(); mdown = true;
+  mx = pmx = e.touches[0].clientX; my = pmy = e.touches[0].clientY;
+}, { passive: false });
+cvs.addEventListener('touchmove', e => {
+  e.preventDefault();
+  pmx = mx; pmy = my;
+  mx = e.touches[0].clientX; my = e.touches[0].clientY;
+}, { passive: false });
+cvs.addEventListener('touchend', () => mdown = false);
+
+// ---- Load image ----
+function load(src) {
+  const i = new Image();
+  i.onload = () => {
+    img = i;
+    buildCloth();
+    document.getElementById('up').classList.add('gone');
+    document.getElementById('tag').classList.add('show');
+  };
+  i.src = src;
+}
+
+// File input
+const fi = document.getElementById('fi');
+document.getElementById('uc').addEventListener('click', () => fi.click());
+fi.addEventListener('change', e => {
+  if (!e.target.files[0]) return;
+  const r = new FileReader();
+  r.onload = ev => load(ev.target.result);
+  r.readAsDataURL(e.target.files[0]);
+});
+document.getElementById('newBtn').addEventListener('click', () => fi.click());
+
+// Drag & drop
+document.addEventListener('dragover', e => { e.preventDefault(); document.body.classList.add('dragover'); });
+document.addEventListener('dragleave', () => document.body.classList.remove('dragover'));
+document.addEventListener('drop', e => {
+  e.preventDefault();
+  document.body.classList.remove('dragover');
+  const f = e.dataTransfer.files[0];
+  if (f && f.type.startsWith('image/')) {
+    const r = new FileReader();
+    r.onload = ev => load(ev.target.result);
+    r.readAsDataURL(f);
+  }
+});
+</script>
+</body>
+</html>
