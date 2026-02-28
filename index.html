@@ -65,6 +65,7 @@
     font-family: 'Space Grotesk', sans-serif; font-size: 12px;
     color: #fff; background: #ff6b35; border: none;
     padding: 10px 28px; border-radius: 8px; cursor: pointer;
+    display: flex; align-items: center; gap: 8px;
     transition: background 0.2s, transform 0.15s;
   }
   .tag button:hover { background: #ff8555; transform: translateY(-1px); }
@@ -119,7 +120,10 @@
 <div class="hint" id="hint">Drag on the image to apply physical mass</div>
 
 <div class="tag" id="tag">
-  <button id="newBtn">+ new image</button>
+  <button id="newBtn">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+    new image
+  </button>
 </div>
 <input type="file" id="fi" accept="image/*">
 
