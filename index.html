@@ -208,21 +208,32 @@ function resize() {
 resize();
 addEventListener('resize', resize);
 
-// ─── Cloth config (fewer points on mobile) ───────────────────────────────────
-const COLS       = isMobile ? 18 : 30;
-const ROWS       = isMobile ? 18 : 30;
-const ITERATIONS = isMobile ?  3 :  4;
-const DAMPING    = 0.96;
-const GRAVITY    = 0.25;
-const RADIUS     = 45;
+// ─── Cloth config ────────────────────────────────────────────────────────────
+const COLS       = isMobile ? 14 : 30;
+const ROWS       = isMobile ? 14 : 30;
+const ITERATIONS = isMobile ?  2 :  4;
+const DAMPING    = 0.95;
+const GRAVITY    = 0.06;
+const RADIUS     = isMobile ? 85 : 65;
+const R2         = RADIUS * RADIUS;
 
-let pts = [], links = [];
+// Flat typed arrays — cache-friendly, no GC pressure
+let pX, pY, pOX, pOY, pPX, pPY;   // point positions (cur, origin, prev)
+let lA, lB, lRest;                  // link endpoints + rest lengths
+let nPts = 0, nLinks = 0;
 let posData = null, indexCount = 0;
 let mx = 0, my = 0, pmx = 0, pmy = 0, mdown = false;
 
 // ─── Build cloth ─────────────────────────────────────────────────────────────
 function buildCloth() {
-  pts = []; links = [];
+  nPts  = COLS * ROWS;
+  nLinks = (COLS-1)*ROWS + COLS*(ROWS-1);
+
+  pX   = new Float32Array(nPts);  pY   = new Float32Array(nPts);
+  pOX  = new Float32Array(nPts);  pOY  = new Float32Array(nPts);
+  pPX  = new Float32Array(nPts);  pPY  = new Float32Array(nPts);
+  lA   = new Int32Array(nLinks);  lB   = new Int32Array(nLinks);
+  lRest = new Float32Array(nLinks);
 
   const scale = Math.min((W * 0.55) / img.width, (H * 0.6) / img.height);
   const cw = img.width  * scale,  ch = img.height * scale;
@@ -234,23 +245,42 @@ function buildCloth() {
 
   for (let r = 0; r < ROWS; r++) {
     for (let c = 0; c < COLS; c++) {
-      const x = ox + c * sx, y = oy + r * sy;
-      pts.push({ x, y, ox: x, oy: y, px: x, py: y,
-                 u: c / (COLS-1), v: r / (ROWS-1), pin: false });
-    }
-  }
-  for (let r = 0; r < ROWS; r++) {
-    for (let c = 0; c < COLS; c++) {
       const i = r * COLS + c;
-      if (c < COLS-1) links.push({ a: i, b: i+1,     rest: pdist(pts[i], pts[i+1])     });
-      if (r < ROWS-1) links.push({ a: i, b: i+COLS,  rest: pdist(pts[i], pts[i+COLS])  });
+      const x = ox + c * sx, y = oy + r * sy;
+      pX[i] = pOX[i] = pPX[i] = x;
+      pY[i] = pOY[i] = pPY[i] = y;
     }
   }
 
+  let lk = 0;
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      const i = r * COLS + c;
+      if (c < COLS-1) {
+        const j = i + 1;
+        lA[lk] = i; lB[lk] = j;
+        const dx = pX[j]-pX[i], dy = pY[j]-pY[i];
+        lRest[lk] = Math.sqrt(dx*dx + dy*dy);
+        lk++;
+      }
+      if (r < ROWS-1) {
+        const j = i + COLS;
+        lA[lk] = i; lB[lk] = j;
+        const dx = pX[j]-pX[i], dy = pY[j]-pY[i];
+        lRest[lk] = Math.sqrt(dx*dx + dy*dy);
+        lk++;
+      }
+    }
+  }
+  nLinks = lk;
+
   // UV buffer – static, set once
-  const uvArr = new Float32Array(pts.length * 2);
-  for (let i = 0; i < pts.length; i++) {
-    uvArr[i*2] = pts[i].u;  uvArr[i*2+1] = pts[i].v;
+  const uvArr = new Float32Array(nPts * 2);
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      const i = r * COLS + c;
+      uvArr[i*2] = c / (COLS-1);  uvArr[i*2+1] = r / (ROWS-1);
+    }
   }
   gl.bindBuffer(gl.ARRAY_BUFFER, uvBuf);
   gl.bufferData(gl.ARRAY_BUFFER, uvArr, gl.STATIC_DRAW);
@@ -269,54 +299,69 @@ function buildCloth() {
   gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, idxArr, gl.STATIC_DRAW);
   indexCount = idxArr.length;
 
-  // Position buffer – dynamic, pre-allocate storage once
-  posData = new Float32Array(pts.length * 2);
+  // Position buffer – dynamic
+  posData = new Float32Array(nPts * 2);
   gl.bindBuffer(gl.ARRAY_BUFFER, posBuf);
   gl.bufferData(gl.ARRAY_BUFFER, posData, gl.DYNAMIC_DRAW);
 }
 
-function pdist(a, b) {
-  const dx = b.x-a.x, dy = b.y-a.y;
-  return Math.sqrt(dx*dx + dy*dy);
-}
-
 // ─── Physics ─────────────────────────────────────────────────────────────────
 function step() {
-  for (const p of pts) {
-    if (p.pin) continue;
-    const vx = (p.x - p.px) * DAMPING;
-    const vy = (p.y - p.py) * DAMPING;
-    p.px = p.x; p.py = p.y;
-    p.x += vx; p.y += vy + GRAVITY;
+  // spring = 0 while dragging (free deform), gentle on release
+  const spring = mdown ? 0 : 0.014;
+
+  // Verlet integrate
+  for (let i = 0; i < nPts; i++) {
+    const vx = (pX[i] - pPX[i]) * DAMPING;
+    const vy = (pY[i] - pPY[i]) * DAMPING;
+    pPX[i] = pX[i]; pPY[i] = pY[i];
+    pX[i] += vx;
+    pY[i] += vy + GRAVITY;
   }
 
+  // Mouse / touch drag influence
   if (mdown) {
     const dmx = mx - pmx, dmy = my - pmy;
-    for (const p of pts) {
-      const dx = p.x - mx, dy = p.y - my;
-      const d = Math.sqrt(dx*dx + dy*dy);
-      if (d < RADIUS) {
-        const s = ((RADIUS-d)/RADIUS) ** 2 * 1.6;
-        p.px -= dmx * s; p.py -= dmy * s;
+    for (let i = 0; i < nPts; i++) {
+      const dx = pX[i] - mx, dy = pY[i] - my;
+      const d2 = dx*dx + dy*dy;
+      if (d2 < R2) {
+        const d = Math.sqrt(d2);
+        const s = ((RADIUS - d) / RADIUS) ** 2 * 1.8;
+        pPX[i] -= dmx * s; pPY[i] -= dmy * s;
       }
     }
   }
 
+  // Constraint iterations
   for (let it = 0; it < ITERATIONS; it++) {
-    for (const l of links) {
-      const a = pts[l.a], b = pts[l.b];
-      const dx = b.x-a.x, dy = b.y-a.y;
+    for (let l = 0; l < nLinks; l++) {
+      const a = lA[l], b = lB[l];
+      const dx = pX[b]-pX[a], dy = pY[b]-pY[a];
       const d  = Math.sqrt(dx*dx + dy*dy) || 0.001;
-      const diff = (l.rest - d) / d * 0.5;
+      const diff = (lRest[l] - d) / d * 0.5;
       const cx = dx*diff, cy = dy*diff;
-      if (!a.pin) { a.x -= cx; a.y -= cy; }
-      if (!b.pin) { b.x += cx; b.y += cy; }
+      pX[a] -= cx; pY[a] -= cy;
+      pX[b] += cx; pY[b] += cy;
     }
-    for (const p of pts) {
-      if (p.pin) continue;
-      p.x += (p.ox - p.x) * 0.003;
-      p.y += (p.oy - p.y) * 0.003;
+    // Gentle spring back to origin
+    if (spring > 0) {
+      for (let i = 0; i < nPts; i++) {
+        pX[i] += (pOX[i] - pX[i]) * spring;
+        pY[i] += (pOY[i] - pY[i]) * spring;
+      }
     }
+  }
+}
+
+// Soft stop — bleed off velocity gently instead of hard zero
+function stopDrag() {
+  mdown = false;
+  for (let i = 0; i < nPts; i++) {
+    const vx = (pX[i] - pPX[i]) * 0.35;
+    const vy = (pY[i] - pPY[i]) * 0.35;
+    pPX[i] = pX[i] - vx;
+    pPY[i] = pY[i] - vy;
   }
 }
 
@@ -332,9 +377,9 @@ function render(ts = 0) {
   step();
 
   // Stream updated positions to GPU with bufferSubData (avoids reallocation)
-  for (let i = 0; i < pts.length; i++) {
-    posData[i*2]   = pts[i].x;
-    posData[i*2+1] = pts[i].y;
+  for (let i = 0; i < nPts; i++) {
+    posData[i*2]   = pX[i];
+    posData[i*2+1] = pY[i];
   }
   gl.bindBuffer(gl.ARRAY_BUFFER, posBuf);
   gl.bufferSubData(gl.ARRAY_BUFFER, 0, posData);
@@ -366,8 +411,8 @@ render();
 // ─── Input ───────────────────────────────────────────────────────────────────
 cvs.addEventListener('mousedown',  e => { mdown = true;  mx = pmx = e.clientX; my = pmy = e.clientY; });
 cvs.addEventListener('mousemove',  e => { pmx = mx; pmy = my; mx = e.clientX; my = e.clientY; });
-cvs.addEventListener('mouseup',    () => mdown = false);
-cvs.addEventListener('mouseleave', () => mdown = false);
+cvs.addEventListener('mouseup',    stopDrag);
+cvs.addEventListener('mouseleave', stopDrag);
 
 cvs.addEventListener('touchstart', e => {
   e.preventDefault(); mdown = true;
@@ -378,7 +423,7 @@ cvs.addEventListener('touchmove', e => {
   pmx = mx; pmy = my;
   mx = e.touches[0].clientX; my = e.touches[0].clientY;
 }, { passive: false });
-cvs.addEventListener('touchend', () => mdown = false);
+cvs.addEventListener('touchend', stopDrag);
 
 // ─── Texture ─────────────────────────────────────────────────────────────────
 function createTexture(image) {
