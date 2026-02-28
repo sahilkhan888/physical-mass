@@ -28,21 +28,31 @@
   .upload.gone { opacity: 0; visibility: hidden; pointer-events: none; }
 
   .upload-card {
-    width: 380px; padding: 52px 36px;
-    border: 1.5px dashed #2a2a2a; border-radius: 14px;
-    background: #111; text-align: center; cursor: pointer;
-    transition: border-color 0.25s, transform 0.25s;
+    width: 460px; padding: 72px 48px;
+    border: 1px solid #1e1e1e; border-radius: 20px;
+    background: #0d0d0d; text-align: center; cursor: pointer;
+    box-shadow: 0 0 0 1px #1a1a1a, 0 0 80px rgba(255,107,53,0.06);
+    transition: border-color 0.3s, transform 0.3s, box-shadow 0.3s;
   }
   @media (max-width: 440px) {
     .upload-card { width: calc(100vw - 48px); padding: 40px 24px; }
   }
-  .upload-card:hover { border-color: #ff6b35; transform: translateY(-3px); }
-  .upload-card .icon { font-size: 28px; margin-bottom: 18px; color: #ff6b35; }
-  .upload-card h2 {
-    font-family: 'Syne', sans-serif; font-size: 18px;
-    font-weight: 700; color: #e0e0e0; margin-bottom: 8px;
+  .upload-card:hover {
+    border-color: #ff6b3540;
+    box-shadow: 0 0 0 1px #ff6b3530, 0 0 100px rgba(255,107,53,0.12);
+    transform: translateY(-3px);
   }
-  .upload-card p { font-size: 11px; color: #555; line-height: 1.7; }
+  .upload-card .icon { margin-bottom: 24px; }
+  .upload-card h2 {
+    font-family: 'Syne', sans-serif; font-size: 28px;
+    font-weight: 800; color: #fff; letter-spacing: -0.5px;
+  }
+
+  @keyframes float {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-5px); }
+  }
+  .upload-card .icon svg { animation: float 2.8s ease-in-out infinite; }
 
   .tag {
     position: fixed; bottom: 20px; left: 50%;
@@ -63,13 +73,17 @@
   .grid {
     position: fixed; inset: 0; pointer-events: none;
     background-image:
-      linear-gradient(rgba(255,255,255,0.015) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(255,255,255,0.015) 1px, transparent 1px);
+      linear-gradient(rgba(255,255,255,0.025) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,0.025) 1px, transparent 1px);
     background-size: 80px 80px;
   }
 
   #fi { display: none; }
-  body.dragover .upload-card { border-color: #ff6b35; transform: translateY(-3px); }
+  body.dragover .upload-card {
+    border-color: #ff6b3580;
+    box-shadow: 0 0 0 1px #ff6b3560, 0 0 160px rgba(255,107,53,0.22);
+    transform: translateY(-3px);
+  }
 </style>
 </head>
 <body>
@@ -78,9 +92,14 @@
 
 <div class="upload" id="up">
   <label class="upload-card" id="uc" for="fi">
-    <div class="icon">↑</div>
-    <h2>Drop an image</h2>
-    <p>or click to browse · PNG, JPG, WEBP<br>drag the image to see cloth physics</p>
+    <div class="icon">
+      <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#ff6b35" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+        <polyline points="17 8 12 3 7 8"/>
+        <line x1="12" y1="3" x2="12" y2="15"/>
+      </svg>
+    </div>
+    <h2>upload an image</h2>
   </label>
 </div>
 
