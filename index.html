@@ -57,27 +57,25 @@
   .tag {
     position: fixed; bottom: 28px; left: 50%;
     transform: translateX(-50%); z-index: 10;
-    display: flex; align-items: center; gap: 16px;
+    display: flex; flex-direction: column; align-items: center; gap: 16px;
     opacity: 0; transition: opacity 0.6s; white-space: nowrap;
   }
   .tag.show { opacity: 1; }
-  .tag span {
-    font-size: 11px; color: #555; letter-spacing: 0.5px;
-  }
   .tag button {
-    font-family: 'Space Mono', monospace; font-size: 11px;
-    color: #555; background: none; border: 1px solid #222;
-    padding: 6px 14px; border-radius: 6px; cursor: pointer;
-    transition: color 0.2s, border-color 0.2s;
+    font-family: 'Space Mono', monospace; font-size: 12px;
+    color: #fff; background: #ff6b35; border: none;
+    padding: 10px 28px; border-radius: 8px; cursor: pointer;
+    transition: background 0.2s, transform 0.15s;
   }
-  .tag button:hover { color: #ff6b35; border-color: #ff6b35; }
+  .tag button:hover { background: #ff8555; transform: translateY(-1px); }
+  .tag button:active { transform: translateY(0); }
 
   .hint {
-    position: fixed; top: 50%; left: 50%;
-    transform: translate(-50%, calc(-50% + 200px));
+    position: fixed; bottom: 90px; left: 50%;
+    transform: translateX(-50%);
     z-index: 10; pointer-events: none;
-    font-family: 'Space Mono', monospace; font-size: 11px;
-    color: #444; letter-spacing: 0.4px; text-align: center;
+    font-family: 'Syne', sans-serif; font-size: 18px; font-weight: 800;
+    color: #fff; letter-spacing: -0.3px; text-align: center;
     opacity: 0; transition: opacity 0.8s 0.3s;
   }
   .hint.show { opacity: 1; }
