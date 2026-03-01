@@ -212,7 +212,7 @@ addEventListener('resize', resize);
 const COLS       = isMobile ? 10 : 30;
 const ROWS       = isMobile ? 10 : 30;
 const ITERATIONS = isMobile ?  2 :  4;
-const DAMPING    = isMobile ? 0.97 : 0.95;
+const DAMPING    = isMobile ? 0.96 : 0.95;
 const GRAVITY    = isMobile ? 0    : 0.06;
 const RADIUS     = isMobile ? 110  : 65;
 const R2         = RADIUS * RADIUS;
@@ -308,7 +308,7 @@ function buildCloth() {
 // ─── Physics ─────────────────────────────────────────────────────────────────
 function step() {
   // spring = 0 while dragging (free deform), gentle on release
-  const spring = mdown ? 0 : 0.014;
+  const spring = mdown ? 0 : (isMobile ? 0.009 : 0.014);
   // fewer constraint passes while dragging on mobile — spring=0 so structure
   // barely matters mid-gesture; save the budget for the next frame
   const iters  = (mdown && isMobile) ? 1 : ITERATIONS;
@@ -331,7 +331,7 @@ function step() {
       const d2 = dx*dx + dy*dy;
       if (d2 < R2) {
         const t = 1 - d2 / R2;   // 0→1 as point approaches cursor (no sqrt)
-        const s = t * t * 2.2;
+        const s = t * t * (isMobile ? 1.1 : 2.2);
         pPX[i] -= dmx * s; pPY[i] -= dmy * s;
       }
     }
@@ -362,7 +362,7 @@ function step() {
 function stopDrag() {
   mdown = false;
   // mobile: kill more velocity so cloth settles fast without oscillating
-  const keep = isMobile ? 0.15 : 0.35;
+  const keep = isMobile ? 0.28 : 0.35;
   for (let i = 0; i < nPts; i++) {
     const vx = (pX[i] - pPX[i]) * keep;
     const vy = (pY[i] - pPY[i]) * keep;
