@@ -209,12 +209,12 @@ resize();
 addEventListener('resize', resize);
 
 // ─── Cloth config ────────────────────────────────────────────────────────────
-const COLS       = isMobile ? 14 : 30;
-const ROWS       = isMobile ? 14 : 30;
+const COLS       = isMobile ? 10 : 30;
+const ROWS       = isMobile ? 10 : 30;
 const ITERATIONS = isMobile ?  2 :  4;
-const DAMPING    = 0.95;
-const GRAVITY    = 0.06;
-const RADIUS     = isMobile ? 85 : 65;
+const DAMPING    = isMobile ? 0.97 : 0.95;
+const GRAVITY    = isMobile ? 0    : 0.06;
+const RADIUS     = isMobile ? 110  : 65;
 const R2         = RADIUS * RADIUS;
 
 // Flat typed arrays — cache-friendly, no GC pressure
@@ -309,6 +309,9 @@ function buildCloth() {
 function step() {
   // spring = 0 while dragging (free deform), gentle on release
   const spring = mdown ? 0 : 0.014;
+  // fewer constraint passes while dragging on mobile — spring=0 so structure
+  // barely matters mid-gesture; save the budget for the next frame
+  const iters  = (mdown && isMobile) ? 1 : ITERATIONS;
 
   // Verlet integrate
   for (let i = 0; i < nPts; i++) {
@@ -319,22 +322,23 @@ function step() {
     pY[i] += vy + GRAVITY;
   }
 
-  // Mouse / touch drag influence
+  // Touch / mouse drag influence
+  // Uses squared-distance falloff — no sqrt, saves ~100 calls/frame on mobile
   if (mdown) {
     const dmx = mx - pmx, dmy = my - pmy;
     for (let i = 0; i < nPts; i++) {
       const dx = pX[i] - mx, dy = pY[i] - my;
       const d2 = dx*dx + dy*dy;
       if (d2 < R2) {
-        const d = Math.sqrt(d2);
-        const s = ((RADIUS - d) / RADIUS) ** 2 * 1.8;
+        const t = 1 - d2 / R2;   // 0→1 as point approaches cursor (no sqrt)
+        const s = t * t * 2.2;
         pPX[i] -= dmx * s; pPY[i] -= dmy * s;
       }
     }
   }
 
   // Constraint iterations
-  for (let it = 0; it < ITERATIONS; it++) {
+  for (let it = 0; it < iters; it++) {
     for (let l = 0; l < nLinks; l++) {
       const a = lA[l], b = lB[l];
       const dx = pX[b]-pX[a], dy = pY[b]-pY[a];
@@ -354,12 +358,14 @@ function step() {
   }
 }
 
-// Soft stop — bleed off velocity gently instead of hard zero
+// Soft stop — bleed off velocity instead of hard zero
 function stopDrag() {
   mdown = false;
+  // mobile: kill more velocity so cloth settles fast without oscillating
+  const keep = isMobile ? 0.15 : 0.35;
   for (let i = 0; i < nPts; i++) {
-    const vx = (pX[i] - pPX[i]) * 0.35;
-    const vy = (pY[i] - pPY[i]) * 0.35;
+    const vx = (pX[i] - pPX[i]) * keep;
+    const vy = (pY[i] - pPY[i]) * keep;
     pPX[i] = pX[i] - vx;
     pPY[i] = pY[i] - vy;
   }
