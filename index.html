@@ -307,10 +307,9 @@ function buildCloth() {
 
 // ─── Physics ─────────────────────────────────────────────────────────────────
 function step() {
-  // spring = 0 while dragging (free deform), gentle on release
-  const spring = mdown ? 0 : (isMobile ? 0.009 : 0.014);
-  // fewer constraint passes while dragging on mobile — spring=0 so structure
-  // barely matters mid-gesture; save the budget for the next frame
+  // On mobile: always keep a light spring leash so cloth can't fly away.
+  // On desktop: spring=0 during drag for fully free deformation.
+  const spring = mdown ? (isMobile ? 0.008 : 0) : (isMobile ? 0.012 : 0.014);
   const iters  = (mdown && isMobile) ? 1 : ITERATIONS;
 
   // Verlet integrate
@@ -323,15 +322,18 @@ function step() {
   }
 
   // Touch / mouse drag influence
-  // Uses squared-distance falloff — no sqrt, saves ~100 calls/frame on mobile
+  // Cap delta on mobile — fast swipes can't inject runaway velocity
   if (mdown) {
-    const dmx = mx - pmx, dmy = my - pmy;
+    const rawDx = mx - pmx, rawDy = my - pmy;
+    const cap = isMobile ? 20 : 9999;
+    const dmx = Math.max(-cap, Math.min(cap, rawDx));
+    const dmy = Math.max(-cap, Math.min(cap, rawDy));
     for (let i = 0; i < nPts; i++) {
       const dx = pX[i] - mx, dy = pY[i] - my;
       const d2 = dx*dx + dy*dy;
       if (d2 < R2) {
-        const t = 1 - d2 / R2;   // 0→1 as point approaches cursor (no sqrt)
-        const s = t * t * (isMobile ? 1.1 : 2.2);
+        const t = 1 - d2 / R2;
+        const s = t * t * (isMobile ? 0.9 : 2.2);
         pPX[i] -= dmx * s; pPY[i] -= dmy * s;
       }
     }
@@ -348,12 +350,20 @@ function step() {
       pX[a] -= cx; pY[a] -= cy;
       pX[b] += cx; pY[b] += cy;
     }
-    // Gentle spring back to origin
+    // Spring back to origin (always active on mobile)
     if (spring > 0) {
       for (let i = 0; i < nPts; i++) {
         pX[i] += (pOX[i] - pX[i]) * spring;
         pY[i] += (pOY[i] - pY[i]) * spring;
       }
+    }
+  }
+
+  // Hard screen-bounds clamp — safety net so cloth never escapes viewport
+  if (isMobile) {
+    for (let i = 0; i < nPts; i++) {
+      pX[i] = Math.max(0, Math.min(W, pX[i]));
+      pY[i] = Math.max(0, Math.min(H, pY[i]));
     }
   }
 }
