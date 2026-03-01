@@ -57,7 +57,7 @@
   .tag {
     position: fixed; bottom: 28px; left: 50%;
     transform: translateX(-50%); z-index: 10;
-    display: flex; flex-direction: column; align-items: center; gap: 16px;
+    display: flex; flex-direction: row; align-items: center; gap: 12px;
     opacity: 0; transition: opacity 0.6s; white-space: nowrap;
   }
   .tag.show { opacity: 1; }
@@ -70,6 +70,24 @@
   }
   .tag button:hover { background: #ff8555; transform: translateY(-1px); }
   .tag button:active { transform: translateY(0); }
+
+  #binBtn {
+    width: 48px; height: 48px; border-radius: 50%; padding: 0; flex-shrink: 0;
+    background: rgba(255,255,255,0.06);
+    border: 1.5px solid rgba(255,255,255,0.14);
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer; color: rgba(255,255,255,0.5);
+    transition: background 0.25s, border-color 0.25s, box-shadow 0.25s,
+                transform 0.25s, color 0.25s;
+  }
+  #binBtn:hover { background: rgba(255,255,255,0.1); color: rgba(255,255,255,0.8); }
+  #binBtn.hot {
+    background: rgba(239,68,68,0.22);
+    border-color: rgba(239,68,68,0.7);
+    box-shadow: 0 0 24px rgba(239,68,68,0.4);
+    transform: scale(1.2);
+    color: rgb(239,68,68);
+  }
 
   .hint {
     position: fixed; left: 50%;
@@ -120,6 +138,14 @@
 <div class="hint" id="hint">Drag on the image to apply physical mass</div>
 
 <div class="tag" id="tag">
+  <button id="binBtn" aria-label="Delete image">
+    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <polyline points="3 6 5 6 21 6"/>
+      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+      <path d="M10 11v6M14 11v6"/>
+      <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+    </svg>
+  </button>
   <button id="newBtn">
     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 -960 960 960" fill="currentColor"><path d="M440-440H240q-17 0-28.5-11.5T200-480q0-17 11.5-28.5T240-520h200v-200q0-17 11.5-28.5T480-760q17 0 28.5 11.5T520-720v200h200q17 0 28.5 11.5T760-480q0 17-11.5 28.5T720-440H520v200q0 17-11.5 28.5T480-200q-17 0-28.5-11.5T440-240v-200Z"/></svg>
     New Image
@@ -223,6 +249,7 @@ let lA, lB, lRest;                  // link endpoints + rest lengths
 let nPts = 0, nLinks = 0;
 let posData = null, indexCount = 0;
 let mx = 0, my = 0, pmx = 0, pmy = 0, mdown = false;
+let disposeAnim = null; // { bx, by, t } — suck-into-bin animation
 
 // ─── Build cloth ─────────────────────────────────────────────────────────────
 function buildCloth() {
@@ -368,10 +395,42 @@ function step() {
   }
 }
 
+// ─── Bin helpers ─────────────────────────────────────────────────────────────
+function getBinCenter() {
+  const r = document.getElementById('binBtn').getBoundingClientRect();
+  return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+}
+
+function checkBinProximity() {
+  if (!img || !mdown) return;
+  const { x, y } = getBinCenter();
+  const hot = Math.hypot(mx - x, my - y) < 56;
+  document.getElementById('binBtn').classList.toggle('hot', hot);
+}
+
+function startBinDrop() {
+  const { x, y } = getBinCenter();
+  disposeAnim = { bx: x, by: y, t: 0 };
+  if (navigator.vibrate) navigator.vibrate(40);
+}
+
+function resetScene() {
+  img = null;
+  if (tex) { gl.deleteTexture(tex); tex = null; }
+  indexCount = 0;
+  document.getElementById('up').classList.remove('gone');
+  document.getElementById('tag').classList.remove('show');
+  document.getElementById('hint').classList.remove('show');
+}
+
 // Soft stop — bleed off velocity instead of hard zero
 function stopDrag() {
+  if (!mdown) return;
+  const binBtn = document.getElementById('binBtn');
+  const wasHot = binBtn.classList.contains('hot');
+  binBtn.classList.remove('hot');
   mdown = false;
-  // mobile: kill more velocity so cloth settles fast without oscillating
+  if (wasHot && img) { startBinDrop(); return; }
   const keep = isMobile ? 0.28 : 0.35;
   for (let i = 0; i < nPts; i++) {
     const vx = (pX[i] - pPX[i]) * keep;
@@ -386,11 +445,24 @@ let lastTs = 0;
 function render(ts = 0) {
   requestAnimationFrame(render);
   if (!img || !tex || !indexCount) return;
-  // ~30 fps cap on mobile saves CPU/GPU budget
-  if (isMobile && ts - lastTs < 32) return;
+  // Bypass fps cap during dispose so animation is always smooth
+  if (isMobile && !disposeAnim && ts - lastTs < 32) return;
   lastTs = ts;
 
-  step();
+  let renderAlpha = 1.0;
+  if (disposeAnim) {
+    // Accelerating suck-in: cubic ease-in pull toward bin center
+    disposeAnim.t = Math.min(1, disposeAnim.t + 0.055);
+    const pull = disposeAnim.t * disposeAnim.t * 0.28;
+    for (let i = 0; i < nPts; i++) {
+      pX[i] += (disposeAnim.bx - pX[i]) * pull;
+      pY[i] += (disposeAnim.by - pY[i]) * pull;
+    }
+    renderAlpha = Math.max(0, 1 - disposeAnim.t * 1.7);
+    if (disposeAnim.t >= 1) { disposeAnim = null; resetScene(); return; }
+  } else {
+    step();
+  }
 
   // Stream updated positions to GPU with bufferSubData (avoids reallocation)
   for (let i = 0; i < nPts; i++) {
@@ -410,8 +482,8 @@ function render(ts = 0) {
   gl.uniform2f(loc.uRes, W, H);
   gl.uniform1i(loc.uTex, 0);
 
-  // Shadow pass — desktop only (halves draw cost on mobile)
-  if (!isMobile) {
+  // Shadow pass — desktop only, skip during dispose
+  if (!isMobile && !disposeAnim) {
     gl.uniform2f(loc.uOff, 6, 10);
     gl.uniform1f(loc.uAlpha, 0.04);
     gl.drawElements(gl.TRIANGLES, indexCount, gl.UNSIGNED_SHORT, 0);
@@ -419,14 +491,14 @@ function render(ts = 0) {
 
   // Main pass
   gl.uniform2f(loc.uOff, 0, 0);
-  gl.uniform1f(loc.uAlpha, 1.0);
+  gl.uniform1f(loc.uAlpha, renderAlpha);
   gl.drawElements(gl.TRIANGLES, indexCount, gl.UNSIGNED_SHORT, 0);
 }
 render();
 
 // ─── Input ───────────────────────────────────────────────────────────────────
 cvs.addEventListener('mousedown',  e => { mdown = true;  mx = pmx = e.clientX; my = pmy = e.clientY; });
-cvs.addEventListener('mousemove',  e => { pmx = mx; pmy = my; mx = e.clientX; my = e.clientY; });
+cvs.addEventListener('mousemove',  e => { pmx = mx; pmy = my; mx = e.clientX; my = e.clientY; checkBinProximity(); });
 cvs.addEventListener('mouseup',    stopDrag);
 cvs.addEventListener('mouseleave', stopDrag);
 
@@ -438,6 +510,7 @@ cvs.addEventListener('touchmove', e => {
   e.preventDefault();
   pmx = mx; pmy = my;
   mx = e.touches[0].clientX; my = e.touches[0].clientY;
+  checkBinProximity();
 }, { passive: false });
 cvs.addEventListener('touchend', stopDrag);
 
@@ -483,6 +556,7 @@ fi.addEventListener('change', e => {
 });
 
 document.getElementById('newBtn').addEventListener('click', () => fi.click());
+document.getElementById('binBtn').addEventListener('click', () => { if (img) startBinDrop(); });
 
 document.addEventListener('dragover',  e => { e.preventDefault(); document.body.classList.add('dragover'); });
 document.addEventListener('dragleave', ()  => document.body.classList.remove('dragover'));
